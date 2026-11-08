@@ -25,7 +25,11 @@ textarea{width:100%;resize:vertical}
 .seg button{border:0;border-radius:0;padding:.4em 1em}
 .seg button.on{background:var(--fg);color:#fff;font-weight:700}
 .actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-left:auto}
-.status{font-size:.9rem;padding:.25em .7em;border-radius:99px;background:var(--soft)}
+.status{font-size:.9rem;padding:.25em .7em;border-radius:99px;background:var(--soft);border:0}
+.lg-warn{color:var(--red);font-weight:700;font-size:.92rem;margin-left:8px}
+dialog.small{width:min(560px,94vw)}
+dialog .pad{padding:20px 24px 24px}
+dialog .pad h2{font:700 1.35rem var(--f-display);margin:0 0 8px}
 .status.ok{background:#e1f3ea;color:#11683f}.status.warn{background:#fff3d6;color:#8a5a00}.status.bad{background:#fde3e4;color:var(--red);font-weight:700}
 
 .legend{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 20px}
@@ -131,12 +135,12 @@ h3{font:700 1.1rem var(--f-display);margin:14px 0 8px}
   .print-area h1{font:700 18pt var(--f-display);margin:0 0 2mm}
   .psub{margin:0 0 4mm;color:#444}
   .ptbl{width:100%;border-collapse:collapse}
-  .ptbl th,.ptbl td{border:1px solid #999;padding:1.6mm 2.4mm;vertical-align:top;font-size:10pt}
+  .ptbl th,.ptbl td{border:1px solid #999;padding:1.2mm 2.4mm;vertical-align:top;font-size:10pt;line-height:1.35}
   .ptbl th{background:#e8ecf1}
   .ptbl tr.k-c td:nth-child(2){color:var(--t-common);font-weight:700}
   .ptbl tr.k-s td:nth-child(2){color:var(--blue);font-weight:700}
   .pm{color:#555;font-size:9pt;margin-top:1mm}
-  .pcols{display:grid;gap:4mm}.pcols.n3{grid-template-columns:repeat(3,1fr)}
+  .pcols{display:grid;gap:4mm}.pcols.n3{grid-template-columns:repeat(3,1fr)}.pcols.n2{grid-template-columns:repeat(2,1fr)}
   .pcol h2{font:700 12pt var(--f-display);margin:0 0 2mm;padding:1mm 2mm;color:#fff;border-radius:2mm;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .pcol h2.t-common{background:var(--t-common)}.pcol h2.t-care{background:var(--t-care)}.pcol h2.t-general{background:var(--t-general)}.pcol h2.t-tech{background:var(--t-tech)}
   .tt th,.tt td{border:1px solid #999;padding:2mm;font-size:10pt}

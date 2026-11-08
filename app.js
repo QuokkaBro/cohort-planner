@@ -14,21 +14,23 @@ const PERIODS = [
   ['점심', '13:00', '14:00'],
   [5, '14:00', '15:00'], [6, '15:00', '16:00'], [7, '16:00', '17:00'], [8, '17:00', '18:00'],
 ];
-// 법정 공휴일(대체공휴일 포함). 확정 전 윤혁님 확인 필요.
+// 법정 공휴일(대체공휴일 포함). 노동절·제헌절은 2026년부터 공휴일(2027 월력요항 보도로 확인, 2026-11-08).
+const HOLIDAY_LAST = '2027-12-31'; // 이 날짜 뒤로는 공휴일이 없음 → 일정에 경고
 const HOLIDAYS = {
   '2026-01-01': '신정', '2026-02-16': '설날 연휴', '2026-02-17': '설날', '2026-02-18': '설날 연휴',
-  '2026-03-01': '삼일절', '2026-03-02': '대체공휴일', '2026-05-05': '어린이날', '2026-05-24': '부처님오신날',
-  '2026-05-25': '대체공휴일', '2026-06-03': '지방선거', '2026-06-06': '현충일', '2026-08-15': '광복절',
+  '2026-03-01': '삼일절', '2026-03-02': '대체공휴일', '2026-05-01': '노동절', '2026-05-05': '어린이날', '2026-05-24': '부처님오신날',
+  '2026-05-25': '대체공휴일', '2026-06-03': '지방선거', '2026-06-06': '현충일', '2026-07-17': '제헌절', '2026-08-15': '광복절',
   '2026-08-17': '대체공휴일', '2026-09-24': '추석 연휴', '2026-09-25': '추석', '2026-09-26': '추석 연휴',
   '2026-10-03': '개천절', '2026-10-05': '대체공휴일', '2026-10-09': '한글날', '2026-12-25': '성탄절',
   '2027-01-01': '신정', '2027-02-06': '설날 연휴', '2027-02-07': '설날', '2027-02-08': '설날 연휴',
-  '2027-02-09': '대체공휴일', '2027-03-01': '삼일절', '2027-05-05': '어린이날', '2027-05-13': '부처님오신날',
-  '2027-06-06': '현충일', '2027-08-15': '광복절', '2027-08-16': '대체공휴일', '2027-09-14': '추석 연휴',
+  '2027-02-09': '대체공휴일', '2027-03-01': '삼일절', '2027-05-01': '노동절', '2027-05-03': '대체공휴일(노동절)',
+  '2027-05-05': '어린이날', '2027-05-13': '부처님오신날',
+  '2027-06-06': '현충일', '2027-07-17': '제헌절', '2027-07-19': '대체공휴일(제헌절)', '2027-08-15': '광복절', '2027-08-16': '대체공휴일', '2027-09-14': '추석 연휴',
   '2027-09-15': '추석', '2027-09-16': '추석 연휴', '2027-10-03': '개천절', '2027-10-04': '대체공휴일',
   '2027-10-09': '한글날', '2027-10-11': '대체공휴일', '2027-12-25': '성탄절', '2027-12-27': '대체공휴일',
 };
 // 교육일로 세지만 표시만 하는 날(월-일)
-const AMBIGUOUS = { '12-31': '연말: 교육일로 셈', '05-01': '노동절: 회사 휴무 확인', '07-17': '제헌절: 휴무 확인' };
+const AMBIGUOUS = { '12-31': '연말: 교육일로 셈' };
 // docs/agents/cohort-schedule.md 일정표
 const DEFAULT_TASKS = {
   pre: ['1-1 강의장 미리 세팅하기'],
@@ -66,7 +68,18 @@ let SYNC = readLS(LS_SYNC);
 const UI = { view: 'month', cursor: ymd(new Date()), filter: 'all' };
 
 function readLS(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
-function writeLS(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 저장 불가 브라우저 */ } }
+function writeLS(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } }
+// 불러온 데이터 정리: HTML에 들어가는 번호·id·날짜 키를 안전한 모양으로
+function normalize(d) {
+  d.offDays = Object.fromEntries(Object.entries(d.offDays || {}).filter(([k]) => /^\d{4}-\d{2}-\d{2}$/.test(k)));
+  d.curricula ||= {};
+  d.cohorts = (d.cohorts || []).filter((c) => /^\d{4}-\d{2}-\d{2}$/.test(c.start)).map((c) => ({
+    ...c, number: Number(c.number) || 0, id: String(c.id).replace(/[^a-z0-9]/gi, '') || uid(),
+    tasks: c.tasks || [], memos: c.memos || {}, curr: c.curr || {},
+  }));
+  return d;
+}
+S = normalize(S);
 
 // ───── 영업일·일정 계산 ─────
 const holidayName = (s) => S.offDays[s] || HOLIDAYS[s] || '';
@@ -106,12 +119,16 @@ function blocksOf(c, track, n) {
 }
 
 // ───── 저장 ─────
-let pushTimer = null;
+// seq: 고칠 때마다 1씩 늘어나는 번호. 저장 요청은 한 번에 하나만 보냄.
+let pushTimer = null, seq = 0, pushing = false, CONFLICT = false;
 function save() {
-  writeLS(LS_DATA, S);
-  META.dirty = true; writeLS(LS_META, META);
-  if (!SYNC) { setStatus('local'); return; }
-  setStatus('saving');
+  seq++;
+  META.dirty = true;
+  const ok = writeLS(LS_DATA, S) && writeLS(LS_META, META);
+  if (!ok) { setStatus('lsfail'); }
+  if (!SYNC) { if (ok) setStatus('local'); return; }
+  if (CONFLICT) { setStatus('conflict'); return; }
+  if (ok) setStatus('saving');
   clearTimeout(pushTimer);
   pushTimer = setTimeout(push, 1200);
 }
@@ -122,11 +139,13 @@ function setStatus(kind, extra = '') {
     saving: ['저장 중…', ''],
     saved: ['GitHub에 저장됨 ' + extra, 'ok'],
     loaded: ['GitHub 최신 내용 ' + extra, 'ok'],
-    fail: ['저장 실패: ' + extra, 'bad'],
-    conflict: ['다른 PC가 먼저 저장함 → 새로고침', 'bad'],
+    fail: ['저장 실패: ' + extra + ' (눌러서 다시 시도)', 'bad'],
+    conflict: ['다른 PC와 내용이 다름 (눌러서 정하기)', 'bad'],
+    lsfail: ['브라우저에 저장 안 됨! 화면을 닫지 마세요', 'bad'],
   };
   const [t, cls] = map[kind];
   el.textContent = t; el.className = 'status ' + cls;
+  el.dataset.kind = kind;
 }
 const now = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
@@ -142,45 +161,109 @@ async function pull(cfg = SYNC) {
   const j = await r.json();
   return { data: JSON.parse(b64d(j.content)), sha: j.sha };
 }
+const errMsg = (e) => (e.message === 'Failed to fetch' ? '인터넷 확인' : e.message);
 async function push() {
+  if (!SYNC || !META.dirty || CONFLICT) return;
+  if (pushing) return; // 끝나면 아래 finally에서 이어서 보냄
+  pushing = true;
+  const mySeq = seq;
+  let ok = false;
   try {
     const body = { message: '일정판 저장 ' + new Date().toISOString(), content: b64e(JSON.stringify(S, null, 1)) };
     if (META.sha) body.sha = META.sha;
     const r = await fetch(apiUrl(SYNC), { method: 'PUT', headers: apiHeaders(SYNC), body: JSON.stringify(body) });
-    if (r.status === 409 || r.status === 422) { setStatus('conflict'); return; }
+    if (r.status === 409 || r.status === 422) { CONFLICT = true; setStatus('conflict'); return; }
     if (!r.ok) throw new Error(r.status === 401 ? '열쇠(토큰)가 틀림' : '오류 ' + r.status);
-    META.sha = (await r.json()).content.sha; META.dirty = false; writeLS(LS_META, META);
-    setStatus('saved', now());
-  } catch (e) { setStatus('fail', e.message === 'Failed to fetch' ? '인터넷 확인' : e.message); }
+    META.sha = (await r.json()).content.sha;
+    if (seq === mySeq) META.dirty = false; // 보내는 동안 또 고쳤으면 아직 미저장
+    writeLS(LS_META, META);
+    ok = true;
+    setStatus(META.dirty ? 'saving' : 'saved', now());
+  } catch (e) { setStatus('fail', errMsg(e)); }
+  finally {
+    pushing = false;
+    if (ok && META.dirty) push();
+  }
+}
+function adopt(data, sha) {
+  S = normalize(data); META = { sha, dirty: false }; CONFLICT = false;
+  writeLS(LS_DATA, S); writeLS(LS_META, META);
+  setStatus('loaded', now()); render();
 }
 async function startSync() {
-  if (!SYNC) { setStatus(META.dirty || S.cohorts.length ? 'local' : 'local'); return; }
+  if (!SYNC) { setStatus('local'); return; }
   try {
     setStatus('saving');
+    const mySeq = seq;
     const { data, sha } = await pull();
-    if (!data) { META.sha = null; await push(); return; }
-    if (META.dirty && sha !== META.sha) {
-      const useRemote = confirm('다른 PC에서 고친 내용과 이 PC에서 고친 내용이 다릅니다.\n\n[확인] GitHub 내용 쓰기(이 PC 변경 버림)\n[취소] 이 PC 내용으로 GitHub 덮기');
-      if (!useRemote) { META.sha = sha; await push(); return; }
-    } else if (META.dirty && sha === META.sha) { await push(); return; }
-    S = data; META = { sha, dirty: false };
-    writeLS(LS_DATA, S); writeLS(LS_META, META);
-    setStatus('loaded', now()); render();
-  } catch (e) { setStatus('fail', e.message === 'Failed to fetch' ? '인터넷 확인' : e.message); }
+    if (!data) { META.sha = null; META.dirty = true; await push(); return; }
+    if (META.dirty && sha !== META.sha) { openConflict(data, sha); return; }
+    if (META.dirty || seq !== mySeq) { await push(); return; }
+    adopt(data, sha);
+  } catch (e) { setStatus('fail', errMsg(e)); }
+}
+// 두 PC 내용이 다를 때: 기본은 아무것도 안 함. 고르기 전에 양쪽 백업을 받을 수 있음.
+function openConflict(remote, sha) {
+  CONFLICT = true; setStatus('conflict');
+  const dl = (obj, name) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' })); a.download = name; a.click(); };
+  const box = $('#dlg2');
+  box.innerHTML = `<div class="pad"><h2>다른 PC와 내용이 다릅니다</h2>
+    <p>다른 PC에서 저장한 내용(GitHub)과 이 PC에서 아직 못 올린 내용이 둘 다 있습니다. 하나를 고르면 다른 하나는 사라집니다.</p>
+    <p class="hint">GitHub: 기수 ${(remote.cohorts || []).length}개 · 이 PC: 기수 ${S.cohorts.length}개</p>
+    <div class="row"><button id="cfBackup">두 쪽 다 백업 파일로 받기</button></div>
+    <div class="stack" style="margin-top:12px">
+      <button class="primary" id="cfRemote">GitHub 내용 쓰기 (이 PC에서 고친 것 버림)</button>
+      <button class="danger" id="cfLocal">이 PC 내용으로 GitHub 덮기 (다른 PC에서 고친 것 버림)</button>
+      <button id="cfLater">나중에 정하기 (아무것도 안 함)</button>
+    </div></div>`;
+  box.showModal();
+  const stamp = ymd(new Date()) + '-' + now().replace(':', '');
+  $('#cfBackup').onclick = () => { dl(remote, `일정판-GitHub-${stamp}.json`); dl(S, `일정판-이PC-${stamp}.json`); };
+  $('#cfRemote').onclick = () => { box.close(); adopt(remote, sha); };
+  $('#cfLocal').onclick = () => { box.close(); CONFLICT = false; META.sha = sha; META.dirty = true; writeLS(LS_META, META); push(); };
+  $('#cfLater').onclick = () => box.close();
+}
+async function retry() {
+  if (!SYNC) return;
+  if (CONFLICT) {
+    try { const { data, sha } = await pull(); if (data) openConflict(data, sha); else { CONFLICT = false; META.sha = null; push(); } } catch (e) { setStatus('fail', errMsg(e)); }
+  } else if (META.dirty) push();
+  else startSync();
 }
 document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState !== 'visible' || !SYNC || META.dirty) return;
+  if (document.visibilityState !== 'visible' || !SYNC || CONFLICT) return;
+  if (META.dirty) { push(); return; } // 못 올린 게 있으면 다시 시도
+  if ($('#dlg').open) return; // 창에서 작업 중이면 덮지 않음
+  const mySeq = seq;
   try {
     const { data, sha } = await pull();
-    if (data && sha !== META.sha) { S = data; META = { sha, dirty: false }; writeLS(LS_DATA, S); writeLS(LS_META, META); setStatus('loaded', now()); render(); }
+    // 받는 동안 고쳤거나 창을 열었으면 적용하지 않음
+    if (!data || sha === META.sha || seq !== mySeq || META.dirty || $('#dlg').open) return;
+    adopt(data, sha);
   } catch { /* 다음에 다시 */ }
 });
+window.addEventListener('online', () => { if (META.dirty) push(); });
+window.addEventListener('beforeunload', (e) => { if (SYNC && META.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// 입사일이 쉬는 날이 됐거나, 공휴일 목록이 없는 해로 넘어가는 기수
+function scheduleWarnings(start) {
+  const out = [];
+  if (isOff(start)) out.push(`입사일 ${fmt(start)}이 쉬는 날입니다(입사일 바꾸기 필요)`);
+  const s = schedule({ start });
+  if (s[s.length - 1].date > HOLIDAY_LAST) out.push(`${HOLIDAY_LAST.slice(0, 4)}년 뒤 공휴일이 아직 없습니다 → 휴무일에서 직접 추가`);
+  return out;
+}
+function cohortWarnings() {
+  return sortedCohorts().flatMap((c) => scheduleWarnings(c.start).map((w) => `${c.number}기: ${w}`));
+}
 
 // ───── 화면: 달력 ─────
 function render() {
   document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.view === UI.view));
   $('#legend').innerHTML = Object.entries(TRACKS).map(([k, t]) => `<span class="chip t-${k}">${t.short}</span>`).join('')
-    + '<span class="chip t-etc">시작 전·현장</span><span class="lg-note">칸을 누르면 그날 시간표·할 일·메모</span>';
+    + '<span class="chip t-etc">시작 전·현장</span><span class="lg-note">칸을 누르면 그날 시간표·할 일·메모</span>'
+    + cohortWarnings().map((w) => `<span class="lg-warn">⚠ ${w}</span>`).join('');
+  ['#prev', '#next', '#today'].forEach((s) => { $(s).hidden = UI.view === 'table'; });
   if (UI.view === 'table') return renderTable();
   const cur = parse(UI.cursor);
   let first, days;
@@ -230,21 +313,29 @@ function renderTable() {
   const list = sortedCohorts();
   $('#range').textContent = '표 보기';
   const opts = ['<option value="all">모든 기수</option>', ...list.map((c) => `<option value="${c.id}" ${UI.filter === c.id ? 'selected' : ''}>${c.number}기</option>`)].join('');
+  const tf = UI.trackFilter || 'all';
+  const topts = [['all', '모든 과정'], ['common', '공통과정'], ...SPEC.map((t) => [t, TRACKS[t].name]), ['etc', '시작 전·현장']]
+    .map(([v, n]) => `<option value="${v}" ${tf === v ? 'selected' : ''}>${n}</option>`).join('');
   const rows = [];
   for (const c of list) {
     if (UI.filter !== 'all' && UI.filter !== c.id) continue;
     for (const day of schedule(c)) {
+      if (tf === 'common' && day.kind !== 'c') continue;
+      if (tf === 'etc' && day.kind !== 'pre' && day.kind !== 'f') continue;
+      if (SPEC.includes(tf) && !(day.kind === 's' && tracksOf(c).includes(tf))) continue;
       const ts = tasksOf(c, day.key);
-      const label = day.kind === 's' ? `전문과정 ${day.n}일차 (${tracksOf(c).map((t) => TRACKS[t].short).join('·')})` : dayLabel(day);
+      const label = day.kind !== 's' ? dayLabel(day)
+        : SPEC.includes(tf) ? dayLabel(day, tf) : `전문과정 ${day.n}일차 (${tracksOf(c).map((t) => TRACKS[t].short).join('·')})`;
+      const openTr = day.kind !== 's' ? 'common' : SPEC.includes(tf) ? tf : tracksOf(c)[0];
       rows.push({ date: day.date, html: `<tr>
         <td class="nw">${fmt(day.date)}</td><td class="nw">${c.number}기</td>
-        <td><button class="link" data-open="${c.id}|${day.key}|${day.kind === 's' ? tracksOf(c)[0] : 'common'}">${label}</button></td>
+        <td><button class="link" data-open="${c.id}|${day.key}|${openTr}">${label}</button></td>
         <td>${ts.map((t) => `<label class="ck"><input type="checkbox" data-task="${c.id}|${t.id}" ${t.done ? 'checked' : ''}> ${esc(t.text)}</label>`).join('')}</td>
         <td><textarea rows="1" data-memo="${c.id}|${day.key}" placeholder="메모">${esc(c.memos[day.key] || '')}</textarea></td></tr>` });
     }
   }
   rows.sort((a, b) => a.date.localeCompare(b.date));
-  $('#main').innerHTML = `<div class="tbar"><select id="filter">${opts}</select></div>
+  $('#main').innerHTML = `<div class="tbar"><select id="filter">${opts}</select> <select id="filterTrack">${topts}</select></div>
     <table class="tbl"><thead><tr><th>날짜</th><th>기수</th><th>일정</th><th>할 일</th><th>메모</th></tr></thead>
     <tbody>${rows.map((r) => r.html).join('') || '<tr><td colspan="5" class="empty">기수가 없습니다.</td></tr>'}</tbody></table>`;
 }
@@ -329,13 +420,13 @@ function openCohorts() {
     <h3>있는 기수</h3>
     <ul class="clist">${list.map((c) => { const s = schedule(c); return `<li><b>${c.number}기</b> 입사 ${fmt(c.start)} · 공통 ${fmt(s[1].date)}~${fmt(s[8].date)} · 전문 ${fmt(s[9].date)}~${fmt(s[20].date)} · 현장 ${fmt(s[21].date)}
       <span class="row">전문과정: ${SPEC.map((t) => `<label class="ck inl"><input type="checkbox" data-trtoggle="${c.id}|${t}" ${tracksOf(c).includes(t) ? 'checked' : ''}> ${TRACKS[t].short}</label>`).join('')}</span>
-      <span class="row"><button data-recopy="${c.id}">커리큘럼 원본 다시 복사</button><button class="danger" data-cdel="${c.id}">기수 지우기</button></span></li>`; }).join('') || '<li class="muted">없음</li>'}</ul>`;
+      <span class="row"><button data-restart="${c.id}">입사일 바꾸기</button><button data-recopy="${c.id}">커리큘럼 원본 다시 복사</button><button class="danger" data-cdel="${c.id}">기수 지우기</button></span></li>`; }).join('') || '<li class="muted">없음</li>'}</ul>`;
   if (!$('#dlg').open) $('#dlg').showModal();
   const f = $('#fCohort');
   f.start.addEventListener('input', () => {
     if (!f.start.value) return;
     const s = schedule({ start: f.start.value });
-    const warn = isOff(f.start.value) ? ' <b class="bad">⚠ 입사일이 쉬는 날입니다</b>' : '';
+    const warn = scheduleWarnings(f.start.value).map((w) => `<br><b class="bad">⚠ ${w}</b>`).join('');
     const amb = s.filter((d) => AMBIGUOUS[d.date.slice(5)]).map((d) => `${fmt(d.date)} ${AMBIGUOUS[d.date.slice(5)]}`);
     $('#pv').innerHTML = `시작 전 ${fmt(s[0].date)} · 공통 ${fmt(s[1].date)}~${fmt(s[8].date)} · 전문 ${fmt(s[9].date)}~${fmt(s[20].date)} · 현장 ${fmt(s[21].date)}${warn}${amb.length ? '<br>확인할 날: ' + amb.join(', ') : ''}`;
   });
@@ -344,6 +435,7 @@ function openCohorts() {
     const number = Number(f.num.value);
     const tracks = [...f.querySelectorAll('[name=tr]:checked')].map((i) => i.value);
     if (!tracks.length) { alert('전문과정을 하나 이상 고르세요.'); return; }
+    if (isOff(f.start.value)) { alert(`${fmt(f.start.value)}은 쉬는 날(주말·공휴일·회사 휴무)입니다. 입사일을 다시 고르세요.`); return; }
     if (S.cohorts.some((c) => c.number === number) && !confirm(`${number}기가 이미 있습니다. 하나 더 만들까요?`)) return;
     const tasks = [];
     for (const [key, list2] of Object.entries(DEFAULT_TASKS)) list2.forEach((text) => tasks.push({ id: uid(), key, text, done: false }));
@@ -385,11 +477,23 @@ function currGrid(cur, track) {
 function parseCurr(text, track) {
   const j = JSON.parse(text);
   if (!Array.isArray(j.days)) throw new Error('days 목록이 없습니다');
-  for (const d of j.days) for (const b of d.blocks || []) {
-    if (!(b.from >= 1 && b.to <= 8 && b.from <= b.to)) throw new Error(`${d.day}일차 교시 번호가 이상합니다(${b.from}~${b.to})`);
-  }
+  const maxDay = track === 'common' ? 8 : 12, seen = new Set();
+  const days = j.days.map((d) => {
+    const day = Number(d.day);
+    if (!Number.isInteger(day) || day < 1 || day > maxDay) throw new Error(`일차 번호가 이상합니다(${d.day}). ${TRACKS[track].short}은 1~${maxDay}일차`);
+    if (seen.has(day)) throw new Error(`${day}일차가 두 번 있습니다`);
+    seen.add(day);
+    const used = new Set();
+    const blocks = (d.blocks || []).map((b) => {
+      const from = Number(b.from), to = Number(b.to);
+      if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to > 8 || from > to) throw new Error(`${day}일차 교시 번호가 이상합니다(${b.from}~${b.to})`);
+      for (let p = from; p <= to; p++) { if (used.has(p)) throw new Error(`${day}일차 ${p}교시가 겹칩니다`); used.add(p); }
+      return { from, to, subject: String(b.subject ?? ''), instructor: String(b.instructor ?? '') };
+    }).sort((a, b) => a.from - b.from);
+    return { day, blocks };
+  });
   if (j.track && TRACKS[j.track] && j.track !== track && !confirm(`파일은 ${TRACKS[j.track].name}입니다. 지금 고른 ${TRACKS[track].name}에 넣을까요?`)) throw new Error('취소함');
-  return { track, version: j.version || ymd(new Date()), days: j.days.map((d) => ({ day: d.day, blocks: d.blocks || [] })) };
+  return { track, version: j.version || ymd(new Date()), days };
 }
 
 // ───── 휴무일 ─────
@@ -405,7 +509,13 @@ function openOff() {
     <details><summary>들어 있는 법정 공휴일 (확인 필요)</summary><ul class="hol">${hol}</ul></details>
     <p class="hint">교육일로 세되 표시만 하는 날: ${Object.entries(AMBIGUOUS).map(([k, v]) => `${k} ${v}`).join(' · ')}</p>`;
   if (!$('#dlg').open) $('#dlg').showModal();
-  $('#fOff').addEventListener('submit', (e) => { e.preventDefault(); S.offDays[e.target.d.value] = e.target.n.value.trim(); save(); render(); openOff(); });
+  $('#fOff').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const d = e.target.d.value;
+    const hit = S.cohorts.filter((c) => c.start === d);
+    if (hit.length && !confirm(`${fmt(d)}은 ${hit.map((c) => c.number + '기').join(', ')} 입사일입니다. 휴무로 넣으면 입사일을 바꿔야 합니다. 그래도 넣을까요?`)) return;
+    S.offDays[d] = e.target.n.value.trim(); save(); render(); openOff();
+  });
 }
 
 // ───── A4 출력 ─────
@@ -463,22 +573,24 @@ function openSync() {
     <form id="fSync" class="stack">
       <label>GitHub 아이디 <input name="owner" value="${esc(s.owner || '')}" required placeholder="예: QuokkaBro"></label>
       <label>비공개 저장소 이름 <input name="repo" value="${esc(s.repo || '')}" required placeholder="예: cohort-data"></label>
-      <label>열쇠(fine-grained 토큰) <input name="token" type="password" value="${esc(s.token || '')}" required placeholder="github_pat_…"></label>
+      <label>열쇠(fine-grained 토큰) <input name="token" type="password" autocomplete="off" ${s.token ? 'placeholder="저장된 열쇠 있음 (바꿀 때만 새로 입력)"' : 'required placeholder="github_pat_…"'}></label>
       <div class="row"><button class="primary">연결하고 저장</button>${SYNC ? '<button type="button" class="danger" id="unsync">연결 끊기(이 PC만)</button>' : ''}</div>
       <p id="syncMsg" class="hint"></p>
     </form>
     <details><summary>열쇠 만드는 법</summary><ol class="hint">
       <li>GitHub → 오른쪽 위 사진 → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</li>
       <li>Repository access: <b>Only select repositories</b> → 비공개 저장소 하나만 고르기</li>
+      <li>Expiration(만료일): 1년 정도로 정하기. 끝나면 새로 만들어 다시 넣기</li>
       <li>Permissions → Repository permissions → <b>Contents: Read and write</b></li>
       <li>만든 열쇠(github_pat_…)를 위 칸에 붙여넣기</li></ol></details>`;
   if (!$('#dlg').open) $('#dlg').showModal();
   $('#fSync').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const f = e.target, cfg = { owner: f.owner.value.trim(), repo: f.repo.value.trim(), token: f.token.value.trim(), path: 'planner.json' };
+    const f = e.target, cfg = { owner: f.owner.value.trim(), repo: f.repo.value.trim(), token: f.token.value.trim() || s.token || '', path: 'planner.json' };
+    if (!cfg.token) { $('#syncMsg').innerHTML = '<b class="bad">열쇠를 넣으세요.</b>'; return; }
     $('#syncMsg').textContent = '연결 시험 중…';
     try { await pull(cfg); } catch (err) { $('#syncMsg').innerHTML = `<b class="bad">연결 실패: ${esc(err.message === 'Failed to fetch' ? '인터넷 확인' : err.message)}</b>`; return; }
-    SYNC = cfg; writeLS(LS_SYNC, SYNC);
+    SYNC = cfg; writeLS(LS_SYNC, SYNC); CONFLICT = false;
     $('#syncMsg').textContent = '연결됨.';
     await startSync();
     $('#dlg').close();
@@ -487,9 +599,14 @@ function openSync() {
 }
 
 // ───── 이벤트 ─────
+// 시간표를 고치는 중에 창을 다시 그리는 버튼을 누르면 먼저 묻기
+const leaveEdit = () => !document.querySelector('#dlgBody .ed') || confirm('고치던 시간표가 아직 저장되지 않았습니다. 버리고 계속할까요?');
+$('#dlg').addEventListener('cancel', (e) => { if (!leaveEdit()) e.preventDefault(); });
 document.addEventListener('click', (e) => {
   const t = e.target.closest('button, [data-open]'); if (!t) return;
   const d = t.dataset;
+  if ((d.close !== undefined || d.tab || d.tdel || d.trdel) && !leaveEdit()) return;
+  if (t.id === 'status') { retry(); return; }
   if (d.view) { UI.view = d.view; render(); }
   else if (t.id === 'prev' || t.id === 'next') {
     const dir = t.id === 'prev' ? -1 : 1;
@@ -536,6 +653,14 @@ document.addEventListener('click', (e) => {
     save(); render(); openCurr(track);
   }
   else if (d.odel) { delete S.offDays[d.odel]; save(); render(); openOff(); }
+  else if (d.restart) {
+    const c = findCohort(d.restart);
+    const v = prompt(`${c.number}기 새 입사일(예: 2027-01-04)`, c.start);
+    if (v === null) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v.trim()) || isNaN(parse(v.trim()))) { alert('날짜 모양이 다릅니다. 예: 2027-01-04'); return; }
+    if (isOff(v.trim())) { alert(`${fmt(v.trim())}은 쉬는 날입니다. 다른 날을 고르세요.`); return; }
+    c.start = v.trim(); save(); render(); openCohorts();
+  }
 });
 document.addEventListener('change', (e) => {
   const el = e.target;
@@ -548,18 +673,19 @@ document.addEventListener('change', (e) => {
     save(); render();
   }
   else if (el.id === 'filter') { UI.filter = el.value; render(); }
+  else if (el.id === 'filterTrack') { UI.trackFilter = el.value; render(); }
   else if (el.id === 'cf' && el.files[0]) { el.files[0].text().then((txt) => { $('#cj').value = txt; }); }
 });
-let memoTimer = null;
 document.addEventListener('input', (e) => {
   const el = e.target; if (!el.dataset.memo) return;
   const [cid, key] = el.dataset.memo.split('|'), c = findCohort(cid);
   if (el.value.trim()) c.memos[key] = el.value; else delete c.memos[key];
-  clearTimeout(memoTimer); memoTimer = setTimeout(save, 600);
+  save(); // 브라우저에는 바로 저장, GitHub은 1.2초 뒤
 });
 document.addEventListener('submit', (e) => {
   const f = e.target; if (!f.dataset.tadd) return;
   e.preventDefault();
+  if (!leaveEdit()) return;
   const [cid, key, tr] = f.dataset.tadd.split('|');
   findCohort(cid).tasks.push({ id: uid(), key, text: f.t.value.trim(), done: false });
   save(); render(); openDay(cid, key, tr);
