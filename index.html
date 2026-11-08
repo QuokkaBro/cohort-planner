@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>기수 일정판</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@500;700&family=Noto+Sans+KR:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>기수 일정판</h1>
+  <div class="nav">
+    <button id="prev" aria-label="이전">◀</button>
+    <strong id="range"></strong>
+    <button id="next" aria-label="다음">▶</button>
+    <button id="today">오늘</button>
+  </div>
+  <div class="seg" role="tablist">
+    <button data-view="month" class="on">월 달력</button>
+    <button data-view="week">주 달력</button>
+    <button data-view="table">표</button>
+  </div>
+  <div class="actions">
+    <button id="btnCohort" class="primary">+ 기수 만들기</button>
+    <button id="btnCurr">커리큘럼</button>
+    <button id="btnOff">휴무일</button>
+    <button id="btnPrint">A4 출력</button>
+    <button id="btnSync">저장 설정</button>
+    <span id="status" class="status"></span>
+  </div>
+</header>
+
+<div class="legend" id="legend"></div>
+<main id="main"></main>
+
+<dialog id="dlg"><div id="dlgBody"></div></dialog>
+<div id="print" class="print-area"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
