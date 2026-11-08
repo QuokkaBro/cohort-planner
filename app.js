@@ -96,6 +96,8 @@ function indexByDate() {
 const sortedCohorts = () => [...S.cohorts].sort((a, b) => a.start.localeCompare(b.start));
 const findCohort = (id) => S.cohorts.find((c) => c.id === id);
 const tasksOf = (c, key) => c.tasks.filter((t) => t.key === key);
+// 기수마다 진행하는 전문과정(예: 일반만, 고객케어+일반). 없으면 3개 다.
+const tracksOf = (c) => SPEC.filter((t) => (c.tracks || SPEC).includes(t));
 
 function blocksOf(c, track, n) {
   const cur = c.curr?.[track];
@@ -215,7 +217,8 @@ function entryHtml(c, day) {
   const badge = ts.length ? `<span class="tb ${left ? '' : 'done'}">할 일 ${ts.length - left}/${ts.length}</span>` : '';
   const detail = UI.view === 'week' && ts.length ? `<ul class="wt">${ts.map((t) => `<li class="${t.done ? 'done' : ''}">${esc(t.text)}</li>`).join('')}</ul>` : '';
   if (day.kind === 's') {
-    return `<div class="grp">${SPEC.map((tr) => `<button class="chip t-${tr}" data-open="${c.id}|${day.key}|${tr}">${c.number}기 ${TRACKS[tr].short} ${day.n}일차</button>`).join('')}${badge ? `<button class="chip t-task" data-open="${c.id}|${day.key}|care">${badge}</button>` : ''}${detail}</div>`;
+    const trs = tracksOf(c);
+    return `<div class="grp">${trs.map((tr) => `<button class="chip t-${tr}" data-open="${c.id}|${day.key}|${tr}">${c.number}기 ${TRACKS[tr].short} ${day.n}일차</button>`).join('')}${badge ? `<button class="chip t-task" data-open="${c.id}|${day.key}|${trs[0]}">${badge}</button>` : ''}${detail}</div>`;
   }
   const tr = day.kind === 'c' ? 'common' : 'etc';
   const label = day.kind === 'c' ? `공통 ${day.n}일차` : dayLabel(day);
@@ -232,10 +235,10 @@ function renderTable() {
     if (UI.filter !== 'all' && UI.filter !== c.id) continue;
     for (const day of schedule(c)) {
       const ts = tasksOf(c, day.key);
-      const label = day.kind === 's' ? `전문과정 ${day.n}일차 (3개 반)` : dayLabel(day);
+      const label = day.kind === 's' ? `전문과정 ${day.n}일차 (${tracksOf(c).map((t) => TRACKS[t].short).join('·')})` : dayLabel(day);
       rows.push({ date: day.date, html: `<tr>
         <td class="nw">${fmt(day.date)}</td><td class="nw">${c.number}기</td>
-        <td><button class="link" data-open="${c.id}|${day.key}|${day.kind === 's' ? 'care' : 'common'}">${label}</button></td>
+        <td><button class="link" data-open="${c.id}|${day.key}|${day.kind === 's' ? tracksOf(c)[0] : 'common'}">${label}</button></td>
         <td>${ts.map((t) => `<label class="ck"><input type="checkbox" data-task="${c.id}|${t.id}" ${t.done ? 'checked' : ''}> ${esc(t.text)}</label>`).join('')}</td>
         <td><textarea rows="1" data-memo="${c.id}|${day.key}" placeholder="메모">${esc(c.memos[day.key] || '')}</textarea></td></tr>` });
     }
@@ -270,8 +273,10 @@ function openDay(cid, key, track, editing = false) {
   const c = findCohort(cid); if (!c) return;
   const day = schedule(c).find((d) => d.key === key);
   const hasTT = day.kind === 'c' || day.kind === 's';
-  const tr = day.kind === 's' ? track : 'common';
-  const tabs = day.kind === 's' ? `<div class="tabs">${SPEC.map((t) => `<button class="chip t-${t} ${t === tr ? 'on' : ''}" data-tab="${t}">${TRACKS[t].short}</button>`).join('')}</div>` : '';
+  const trs = tracksOf(c);
+  const tr = day.kind === 's' ? (trs.includes(track) ? track : trs[0]) : 'common';
+  const tabs = day.kind === 's' ? `<div class="tabs">${trs.map((t) => `<button class="chip t-${t} ${t === tr ? 'on' : ''}" data-tab="${t}">${TRACKS[t].short}</button>`).join('')}
+    ${trs.length > 1 ? `<button class="danger trdel" data-trdel="${cid}|${key}|${tr}">${c.number}기에서 ${TRACKS[tr].short} 전문과정 빼기</button>` : ''}</div>` : '';
   const blocks = hasTT ? blocksOf(c, tr, day.n) : null;
   const tt = !hasTT ? '' : (blocks === null && !editing
     ? `<p class="miss box">${TRACKS[tr].name} 커리큘럼이 아직 없습니다. 위의 <b>커리큘럼</b>에서 넣거나, 아래 <b>이 날 시간표 고치기</b>로 직접 넣으세요.</p>`
@@ -317,11 +322,13 @@ function openCohorts() {
       <label>기수 번호 <input name="num" type="number" min="1" required placeholder="예: 405"></label>
       <label>입사일(공통 1일차) <input name="start" type="date" required></label>
       <p id="pv" class="hint">입사일을 넣으면 일정이 미리 보입니다.</p>
+      <fieldset class="trs"><legend>진행하는 전문과정</legend>${SPEC.map((t) => `<label class="ck"><input type="checkbox" name="tr" value="${t}" checked> ${TRACKS[t].name}</label>`).join('')}</fieldset>
       <p class="hint">커리큘럼 원본(${have})을 이 기수에 복사합니다. 기본 할 일은 기수 일정 기준표대로 들어갑니다.</p>
       <button class="primary">만들기</button>
     </form>
     <h3>있는 기수</h3>
     <ul class="clist">${list.map((c) => { const s = schedule(c); return `<li><b>${c.number}기</b> 입사 ${fmt(c.start)} · 공통 ${fmt(s[1].date)}~${fmt(s[8].date)} · 전문 ${fmt(s[9].date)}~${fmt(s[20].date)} · 현장 ${fmt(s[21].date)}
+      <span class="row">전문과정: ${SPEC.map((t) => `<label class="ck inl"><input type="checkbox" data-trtoggle="${c.id}|${t}" ${tracksOf(c).includes(t) ? 'checked' : ''}> ${TRACKS[t].short}</label>`).join('')}</span>
       <span class="row"><button data-recopy="${c.id}">커리큘럼 원본 다시 복사</button><button class="danger" data-cdel="${c.id}">기수 지우기</button></span></li>`; }).join('') || '<li class="muted">없음</li>'}</ul>`;
   if (!$('#dlg').open) $('#dlg').showModal();
   const f = $('#fCohort');
@@ -335,10 +342,12 @@ function openCohorts() {
   f.addEventListener('submit', (e) => {
     e.preventDefault();
     const number = Number(f.num.value);
+    const tracks = [...f.querySelectorAll('[name=tr]:checked')].map((i) => i.value);
+    if (!tracks.length) { alert('전문과정을 하나 이상 고르세요.'); return; }
     if (S.cohorts.some((c) => c.number === number) && !confirm(`${number}기가 이미 있습니다. 하나 더 만들까요?`)) return;
     const tasks = [];
     for (const [key, list2] of Object.entries(DEFAULT_TASKS)) list2.forEach((text) => tasks.push({ id: uid(), key, text, done: false }));
-    S.cohorts.push({ id: uid(), number, start: f.start.value, tasks, memos: {}, curr: clone(S.curricula) });
+    S.cohorts.push({ id: uid(), number, start: f.start.value, tracks, tasks, memos: {}, curr: clone(S.curricula) });
     save(); UI.cursor = f.start.value; UI.view = UI.view === 'table' ? 'month' : UI.view; render(); openCohorts();
   });
 }
@@ -437,7 +446,7 @@ function printAll(c, trainee) {
 }
 function printDay(c, key, trainee) {
   const d = schedule(c).find((x) => x.key === key);
-  const tracks = d.kind === 's' ? SPEC : ['common'];
+  const tracks = d.kind === 's' ? tracksOf(c) : ['common'];
   const cols = tracks.map((t) => `<div class="pcol"><h2 class="t-${t}">${TRACKS[t].name} ${d.n}일차</h2>${ttHtml(blocksOf(c, t, d.n) || [], false)}</div>`).join('');
   const ts = tasksOf(c, key);
   const extra = trainee ? '' : `<div class="pextra"><b>할 일</b> ${ts.map((t) => `${t.done ? '☑' : '☐'} ${esc(t.text)}`).join(' · ') || '없음'}${c.memos[key] ? `<br><b>메모</b> ${esc(c.memos[key])}` : ''}</div>`;
@@ -506,6 +515,12 @@ document.addEventListener('click', (e) => {
     if (i >= 0) days[i].blocks = blocks; else days.push({ day: n, blocks });
     save(); openDay(cid, key, tr);
   }
+  else if (d.trdel) {
+    const [cid, key, tr] = d.trdel.split('|'), c = findCohort(cid);
+    if (!confirm(`${c.number}기에서 ${TRACKS[tr].name}을 뺄까요?\n달력에서 사라집니다. 기수 만들기 창의 '있는 기수'에서 다시 체크하면 시간표 그대로 돌아옵니다.`)) return;
+    c.tracks = tracksOf(c).filter((x) => x !== tr);
+    save(); render(); openDay(cid, key, c.tracks[0]);
+  }
   else if (d.tdel) { const [cid, id, key, tr] = d.tdel.split('|'), c = findCohort(cid); c.tasks = c.tasks.filter((x) => x.id !== id); save(); render(); openDay(cid, key, tr); }
   else if (d.cdel) { const c = findCohort(d.cdel); if (confirm(`${c.number}기를 지울까요? 할 일·메모·시간표가 같이 지워집니다.`)) { S.cohorts = S.cohorts.filter((x) => x !== c); save(); render(); openCohorts(); } }
   else if (d.recopy) { const c = findCohort(d.recopy); if (confirm(`${c.number}기 시간표를 지금 커리큘럼 원본으로 덮어쓸까요? 이 기수에서 고친 시간표는 사라집니다.`)) { c.curr = clone(S.curricula); save(); alert('복사했습니다.'); } }
@@ -525,6 +540,13 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset.task) { const [cid, id] = el.dataset.task.split('|'); const tk = findCohort(cid).tasks.find((x) => x.id === id); tk.done = el.checked; save(); if (UI.view !== 'table') render(); }
+  else if (el.dataset.trtoggle) {
+    const [cid, tr] = el.dataset.trtoggle.split('|'), c = findCohort(cid);
+    const next = el.checked ? [...tracksOf(c), tr] : tracksOf(c).filter((x) => x !== tr);
+    if (!next.length) { el.checked = true; alert('전문과정은 하나 이상 있어야 합니다.'); return; }
+    c.tracks = SPEC.filter((t) => next.includes(t));
+    save(); render();
+  }
   else if (el.id === 'filter') { UI.filter = el.value; render(); }
   else if (el.id === 'cf' && el.files[0]) { el.files[0].text().then((txt) => { $('#cj').value = txt; }); }
 });
